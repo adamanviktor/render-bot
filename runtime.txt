@@ -1,1 +1,4 @@
-python-3.10.13
+echo python-3.10.13 > runtime.txt
+git add runtime.txt
+git commit -m "fix: set python 3.10.13 runtime"
+git push
