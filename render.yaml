@@ -1,8 +1,5 @@
- 
-services:
-  - type: worker
-    name: bet-alert-bot
-    runtime: python
-    buildCommand: ""
-    startCommand: "python main.py"
-    autoDeploy: false
+type: web
+name: bet-alert-bot
+env: python
+buildCommand: pip install -r requirements.txt
+startCommand: python main.py
