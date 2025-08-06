@@ -1,49 +1,47 @@
 import os
-import time
 import requests
+import time
 from datetime import datetime
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
 from telegram import Bot
+from dotenv import load_dotenv
 
-# Загрузка переменных из .env
+# Загрузка переменных окружения
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-THRESHOLD = 100  # минимальная сумма ставки BACK
+THRESHOLD = int(os.getenv("THRESHOLD", "100"))  # по умолчанию 100
 
 bot = Bot(token=TOKEN)
-
-URL_BASE = "https://www.oddsmath.com/matches"
-
+URL_BASE = "https://www.oddsmath.com/matches/"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115.0 Safari/537.36"
 }
+
+checked_urls = set()
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-def send_message(chat_id, text):
-    try:
-        bot.send_message(chat_id=chat_id, text=text)
-    except Exception as e:
-        log(f"Ошибка при отправке: {e}")
-
 def fetch_matches_for_date(date_str):
-    url = f"{URL_BASE}/{date_str}/"
+    url = URL_BASE + date_str + "/"
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
         if response.status_code != 200:
             log(f"Ошибка загрузки {url}")
             return []
         soup = BeautifulSoup(response.text, "html.parser")
-        match_links = soup.select(".event-table tr a[href*='/match/']")
-        return ["https://www.oddsmath.com" + link['href'] for link in match_links]
+        match_links = soup.select(".event-table tr a[href]")
+        full_urls = ["https://www.oddsmath.com" + link["href"] for link in match_links if '/match/' in link["href"]]
+        return list(set(full_urls))
     except Exception as e:
         log(f"Ошибка: {e}")
         return []
 
 def check_match(url):
+    if url in checked_urls:
+        return
+    checked_urls.add(url)
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         if resp.status_code != 200:
@@ -56,12 +54,13 @@ def check_match(url):
                 value = back.text.replace("€", "").replace(",", "").strip()
                 if value.isdigit() and int(value) >= THRESHOLD:
                     msg = f"💰 BACK: {value} €\n{url}"
-                    send_message(chat_id=CHAT_ID, text=msg)
+                    bot.send_message(chat_id=CHAT_ID, text=msg)
                     log(f"Отправлено: {msg}")
+                    return
     except Exception as e:
         log(f"Ошибка при проверке {url}: {e}")
 
-# Запуск
+# Main
 if __name__ == "__main__":
     while True:
         today = datetime.now().strftime("%Y-%m-%d")
