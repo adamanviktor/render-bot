@@ -10,73 +10,85 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-THRESHOLD = 100  # Пороговая сумма ставки
+THRESHOLD = 100
 
 bot = Bot(token=TOKEN)
-
-URL_BASE = "https://www.oddsmath.com/matches"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+seen_urls = set()
+bad_urls = set()
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-def send_message(text):
+# Получение всех страниц с датами
+def fetch_date_pages():
     try:
-        bot.send_message(chat_id=CHAT_ID, text=text)
-        log(f"Отправлено: {text}")
-    except Exception as e:
-        log(f"Ошибка отправки сообщения: {e}")
-
-def fetch_matches_for_date(date_str):
-    url = f"{URL_BASE}/{date_str}/"
-    log(f"Загружаем список матчей: {url}")
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        log(f"Код ответа: {response.status_code}")
-        if response.status_code != 200:
-            log(f"Ошибка загрузки страницы: {response.status_code}")
+        url = "https://www.oddsmath.com/matches/"
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            log(f"Ошибка загрузки главной страницы")
             return []
-        soup = BeautifulSoup(response.text, "html.parser")
-        match_links = soup.select(".event-table tr a[href*='/match/']")
-        links = ["https://www.oddsmath.com" + a["href"] for a in match_links if "/match/" in a["href"]]
-        log(f"Найдено ссылок: {len(links)}")
-        return links
+        soup = BeautifulSoup(r.text, "html.parser")
+        date_links = []
+        for a in soup.select(".calendar a"):
+            href = a.get("href", "")
+            if "/matches/" in href:
+                full = "https://www.oddsmath.com" + href
+                date_links.append(full)
+        return list(set(date_links))
     except Exception as e:
-        log(f"Ошибка при загрузке списка матчей: {e}")
+        log(f"Ошибка при загрузке дат: {e}")
         return []
 
-def check_match(url):
+# Получение матчей с одной даты
+def fetch_match_links(date_url):
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code != 200:
-            log(f"Не удалось загрузить матч: {url}")
-            return False
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-        bets = soup.select("div.market-line")
-        for bet in bets:
-            back = bet.select_one("div.back div.value")
-            if back:
-                value = back.text.replace("€", "").replace(",", "").strip()
-                if value.isdigit() and int(value) >= THRESHOLD:
-                    msg = f"💰 BACK: {value} €\n{url}"
-                    send_message(msg)
-                    return True
-        return False
+        r = requests.get(date_url, timeout=15)
+        if r.status_code != 200:
+            log(f"Ошибка загрузки {date_url}")
+            return []
+        soup = BeautifulSoup(r.text, "html.parser")
+        links = []
+        for a in soup.select(".event-table a"):
+            href = a.get("href", "")
+            if "/match/" in href:
+                full = "https://www.oddsmath.com" + href
+                links.append(full)
+        return list(set(links))
     except Exception as e:
-        log(f"Ошибка при проверке матча {url}: {e}")
-        return False
+        log(f"Ошибка в дате {date_url}: {e}")
+        return []
 
+# Проверка одного матча
+def check_match(url):
+    if url in seen_urls or url in bad_urls:
+        return
+    seen_urls.add(url)
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return
+        soup = BeautifulSoup(r.text, "html.parser")
+        bet = soup.select_one("div.back div.value")
+        if not bet:
+            bad_urls.add(url)
+            return
+        value = bet.text.replace("€", "").replace(",", "").strip()
+        if value.isdigit() and int(value) >= THRESHOLD:
+            msg = f"💰 BACK: {value} €\n{url}"
+            bot.send_message(chat_id=CHAT_ID, text=msg)
+            log(f"Отправлено: {msg}")
+    except Exception as e:
+        log(f"Ошибка при проверке {url}: {e}")
+
+# Основной цикл
 if __name__ == "__main__":
-    seen = set()
     while True:
-        today = datetime.now().strftime("%Y-%m-%d")
-        matches = fetch_matches_for_date(today)
-        for match_url in matches:
-            if match_url not in seen:
-                seen.add(match_url)
-                check_match(match_url)
+        date_pages = fetch_date_pages()
+        log(f"Найдено дат: {len(date_pages)}")
+        for date_url in date_pages:
+            matches = fetch_match_links(date_url)
+            log(f"Дата: {date_url} — матчей: {len(matches)}")
+            for url in matches:
+                check_match(url)
                 time.sleep(1)
-        time.sleep(1800)  # Каждые 30 минут
+        time.sleep(1800)
