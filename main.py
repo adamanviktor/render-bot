@@ -15,7 +15,11 @@ THRESHOLD = int(os.getenv("THRESHOLD", "100"))  # по умолчанию 100
 bot = Bot(token=TOKEN)
 URL_BASE = "https://www.oddsmath.com/matches/"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Connection": "keep-alive",
+    "Referer": "https://www.google.com/"
 }
 
 checked_urls = set()
