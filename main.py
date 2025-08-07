@@ -1,65 +1,85 @@
 import os
-import time
 import requests
 from bs4 import BeautifulSoup
-from telegram import Bot
-from dotenv import load_dotenv
 from datetime import datetime
+import time
+import telegram
 
-load_dotenv()
+# === Настройки ===
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-THRESHOLD = int(os.getenv("THRESHOLD", "20"))
+THRESHOLD = 20  # 💰 Порог ставки в евро
 
-bot = Bot(token=TOKEN)
-seen = set()
+bot = telegram.Bot(token=TOKEN)
 
-def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+# === Логирование ===
+def log(message):
+    now = datetime.now().strftime("[%H:%M:%S]")
+    print(f"{now} {message}")
 
-def check_given_url(url):
+# === Получение HTML по ссылке ===
+def fetch_html(url):
     try:
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            log(f"Ошибка загрузки: {url} → {r.status_code}")
-            return []
-
-        soup = BeautifulSoup(r.text, "html.parser")
-        match_links = []
-        for a in soup.select("a"):
-            href = a.get("href", "")
-            if "/football/" in href and href not in seen:
-                full = href if href.startswith("http") else "https://www.oddsmath.com" + href
-                match_links.append(full)
-                seen.add(href)
-        return match_links
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.text
     except Exception as e:
-        log(f"Ошибка разбора страницы {url}: {e}")
-        return []
+        log(f"Ошибка загрузки {url}: {e}")
+        return None
 
-def check_back(url):
-    try:
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            return
-        soup = BeautifulSoup(r.text, "html.parser")
-        back = soup.select_one("div.back div.value")
-        if back:
-            val = back.text.replace("€","").replace(",","").strip()
-            if val.isdigit() and int(val) >= THRESHOLD:
-                msg = f"Найдена BACK‑ставка: {val} €\n{url}"
-                bot.send_message(chat_id=CHAT_ID, text=msg)
-                log(f"Уведомил: {msg}")
-    except Exception as e:
-        log(f"Ошибка в ссылке {url}: {e}")
+# === Проверка страницы матча ===
+def check_match(match_url):
+    html = fetch_html(match_url)
+    if not html:
+        return
 
+    soup = BeautifulSoup(html, "html.parser")
+
+    markets = soup.select("tr[onclick]")
+    for market in markets:
+        onclick = market.get("onclick", "")
+        if "back" not in onclick.lower():
+            continue
+
+        cells = market.find_all("td")
+        if len(cells) < 5:
+            continue
+
+        try:
+            amount_str = cells[-1].text.strip().replace("€", "").replace(",", "").split(".")[0]
+            amount = int(amount_str)
+        except Exception:
+            continue
+
+        if amount >= THRESHOLD:
+            message = f"💸 Найдена ставка {amount}€\n🔗 {match_url}"
+            bot.send_message(chat_id=CHAT_ID, text=message)
+            log(f"Отправлено уведомление: {amount}€ — {match_url}")
+            break
+
+# === Главный цикл ===
 if __name__ == "__main__":
-    url = "https://www.oddsmath.com/football/matches/2025-08-07/"
-    log(f"Запускаем бот. Проверяем: {url}")
-    links = check_given_url(url)
-    log(f"Найдено ссылок: {len(links)}")
-    for link in links:
-        log(f"Проверяем: {link}")
-        check_back(link)
-        time.sleep(1)
-    log("Готово.")
+    while True:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        url = f"https://www.oddsmath.com/football/matches/{date_str}/"
+        html = fetch_html(url)
+
+        if not html:
+            time.sleep(1800)
+            continue
+
+        soup = BeautifulSoup(html, "html.parser")
+        links = [
+            "https://www.oddsmath.com" + a["href"]
+            for a in soup.select("a[href^='/football/match/']")
+        ]
+        unique_links = list(set(links))
+
+        log(f"Найдено матчей: {len(unique_links)}")
+
+        for link in unique_links:
+            check_match(link)
+            time.sleep(1)
+
+        time.sleep(1800)  # Проверка каждые 30 минут
