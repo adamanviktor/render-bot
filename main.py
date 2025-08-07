@@ -1,79 +1,83 @@
 import os
-import time
 import requests
-from datetime import datetime
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
 from telegram import Bot
+from dotenv import load_dotenv
 
-# === НАСТРОЙКИ ===
+# Загружаем токен и chat_id из .env
 load_dotenv()
-TOKEN = os.getenv("TOKEN")              # Telegram Bot Token
-CHAT_ID = os.getenv("CHAT_ID")          # Telegram Chat ID
-MATCH_LIST_URL = os.getenv("MATCH_LIST_URL")  # Ссылка на страницу с матчами
-THRESHOLD = int(os.getenv("THRESHOLD", 20))   # Минимальная ставка (евро)
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-# === ТЕЛЕГРАМ-БОТ ===
 bot = Bot(token=TOKEN)
 
-# === HTTP HEADERS ===
+# Страница со списком матчей на день
+MAIN_URL = "https://www.oddsmath.com/football/matches/2025-08-07/"
+
+# Заголовки для обхода блокировки
 HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "Host": "www.oddsmath.com",
+    "Connection": "Keep-Alive",
+    "User-Agent": "Mozilla/5.0",
+    "X-Online-Host": "www.oddsmath.com"
 }
 
-# === ЛОГ ===
-def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-
-# === ОТПРАВКА СООБЩЕНИЯ ===
-def send_message(chat_id, text):
+def extract_match_links():
     try:
-        bot.send_message(chat_id=chat_id, text=text)
+        response = requests.get(MAIN_URL, headers=HEADERS, timeout=10)
+        response.raise_for_status()
     except Exception as e:
-        log(f"Ошибка отправки: {e}")
-
-# === ЗАГРУЗКА СПИСКА МАТЧЕЙ ===
-def fetch_match_links():
-    try:
-        response = requests.get(MATCH_LIST_URL, headers=HEADERS, timeout=10)
-        if response.status_code != 200:
-            log(f"Ошибка загрузки {MATCH_LIST_URL}")
-            return []
-        soup = BeautifulSoup(response.text, "html.parser")
-        links = soup.select(".event-table tr a[href]")
-        full_links = ["https://www.oddsmath.com" + link['href'] for link in links]
-        return full_links
-    except Exception as e:
-        log(f"Ошибка: {e}")
+        print(f"[Ошибка] Не удалось загрузить список матчей: {e}")
         return []
 
-# === ПРОВЕРКА ОТДЕЛЬНОГО МАТЧА ===
-def check_match(url):
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code != 200:
-            return
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for row in soup.select("table tr"):
-            cols = row.find_all("td")
-            if len(cols) >= 7:
-                try:
-                    back_value = float(cols[6].get_text().replace("€", "").strip())
-                    if back_value >= THRESHOLD:
-                        send_message(CHAT_ID, f"Найдена ставка: {back_value}€\n{url}")
-                        break
-                except:
-                    continue
-    except:
-        pass
+    soup = BeautifulSoup(response.text, "html.parser")
+    links = []
 
-# === ОСНОВНАЯ ФУНКЦИЯ ===
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if href.startswith("/football/match/") and "odds" not in href:
+            full_url = "https://www.oddsmath.com" + href
+            if full_url not in links:
+                links.append(full_url)
+
+    return links
+
+def check_stakes(link):
+    try:
+        response = requests.get(link, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"[Ошибка] {link}: {e}")
+        return None
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    # Ищем большие BACK ставки
+    for row in soup.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) < 4:
+            continue
+        try:
+            stake_text = cells[3].text.strip().replace(",", "").replace("€", "")
+            if stake_text and float(stake_text) >= 20_000:
+                return stake_text
+        except:
+            continue
+    return None
+
 def main():
-    log("Сканирование...")
-    links = fetch_match_links()
-    log(f"Найдено матчей: {len(links)}")
+    links = extract_match_links()
+    print(f"Найдено матчей: {len(links)}")
+
     for link in links:
-        check_match(link)
+        stake = check_stakes(link)
+        if stake:
+            text = f"🔔 Найдена ставка BACK: {stake} €\n{link}"
+            print(text)
+            try:
+                bot.send_message(chat_id=CHAT_ID, text=text)
+            except Exception as e:
+                print(f"[Ошибка Telegram] {e}")
 
 if __name__ == "__main__":
     main()
