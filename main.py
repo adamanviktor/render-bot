@@ -6,74 +6,74 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from telegram import Bot
 
-# Загрузка переменных из .env
+# === НАСТРОЙКИ ===
 load_dotenv()
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-THRESHOLD = 20  # Минимальная сумма ставки BACK
+TOKEN = os.getenv("TOKEN")              # Telegram Bot Token
+CHAT_ID = os.getenv("CHAT_ID")          # Telegram Chat ID
+MATCH_LIST_URL = os.getenv("MATCH_LIST_URL")  # Ссылка на страницу с матчами
+THRESHOLD = int(os.getenv("THRESHOLD", 20))   # Минимальная ставка (евро)
 
+# === ТЕЛЕГРАМ-БОТ ===
 bot = Bot(token=TOKEN)
 
-URL_BASE = "https://www.oddsmath.com/matches"
+# === HTTP HEADERS ===
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
+# === ЛОГ ===
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
+# === ОТПРАВКА СООБЩЕНИЯ ===
 def send_message(chat_id, text):
     try:
         bot.send_message(chat_id=chat_id, text=text)
     except Exception as e:
-        log(f"Ошибка при отправке: {e}")
+        log(f"Ошибка отправки: {e}")
 
-def fetch_match_links(date_str):
-    url = f"{URL_BASE}/{date_str}/"
+# === ЗАГРУЗКА СПИСКА МАТЧЕЙ ===
+def fetch_match_links():
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code != 200:
-            log(f"Ошибка загрузки {url}")
+        response = requests.get(MATCH_LIST_URL, headers=HEADERS, timeout=10)
+        if response.status_code != 200:
+            log(f"Ошибка загрузки {MATCH_LIST_URL}")
             return []
-        soup = BeautifulSoup(resp.text, "html.parser")
-        match_links = soup.select(".event-table tr a[href]")
-        return ["https://www.oddsmath.com" + link['href'] for link in match_links]
+        soup = BeautifulSoup(response.text, "html.parser")
+        links = soup.select(".event-table tr a[href]")
+        full_links = ["https://www.oddsmath.com" + link['href'] for link in links]
+        return full_links
     except Exception as e:
         log(f"Ошибка: {e}")
         return []
 
+# === ПРОВЕРКА ОТДЕЛЬНОГО МАТЧА ===
 def check_match(url):
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         if resp.status_code != 200:
             return
         soup = BeautifulSoup(resp.text, "html.parser")
-        rows = soup.select("table tr")
-        for row in rows:
-            cells = row.find_all("td")
-            if len(cells) < 5:
-                continue
-            for cell in cells:
-                text = cell.get_text(strip=True).replace("€", "").replace(",", ".")
-                if text.replace(".", "").isdigit():
-                    value = float(text)
-                    if value >= THRESHOLD:
-                        log(f"Найдена ставка {value}€: {url}")
-                        send_message(CHAT_ID, f"💰 Ставка BACK: {value}€\n{url}")
-                        return  # достаточно первой
-    except Exception as e:
-        log(f"Ошибка матча: {e}")
+        for row in soup.select("table tr"):
+            cols = row.find_all("td")
+            if len(cols) >= 7:
+                try:
+                    back_value = float(cols[6].get_text().replace("€", "").strip())
+                    if back_value >= THRESHOLD:
+                        send_message(CHAT_ID, f"Найдена ставка: {back_value}€\n{url}")
+                        break
+                except:
+                    continue
+    except:
+        pass
 
+# === ОСНОВНАЯ ФУНКЦИЯ ===
 def main():
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    links = fetch_match_links(date_str)
-    if not links:
-        log("Матчей не найдено.")
-        return
+    log("Сканирование...")
+    links = fetch_match_links()
     log(f"Найдено матчей: {len(links)}")
-    for url in links:
-        check_match(url)
-        time.sleep(1)
+    for link in links:
+        check_match(link)
 
 if __name__ == "__main__":
     main()
