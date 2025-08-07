@@ -1,85 +1,79 @@
 import os
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime
 import time
-import telegram
+import requests
+from datetime import datetime
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from telegram import Bot
 
-# === Настройки ===
+# Загрузка переменных из .env
+load_dotenv()
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-THRESHOLD = 20  # 💰 Порог ставки в евро
+THRESHOLD = 20  # Минимальная сумма ставки BACK
 
-bot = telegram.Bot(token=TOKEN)
+bot = Bot(token=TOKEN)
 
-# === Логирование ===
-def log(message):
-    now = datetime.now().strftime("[%H:%M:%S]")
-    print(f"{now} {message}")
+URL_BASE = "https://www.oddsmath.com/matches"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
 
-# === Получение HTML по ссылке ===
-def fetch_html(url):
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+def send_message(chat_id, text):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.text
+        bot.send_message(chat_id=chat_id, text=text)
     except Exception as e:
-        log(f"Ошибка загрузки {url}: {e}")
-        return None
+        log(f"Ошибка при отправке: {e}")
 
-# === Проверка страницы матча ===
-def check_match(match_url):
-    html = fetch_html(match_url)
-    if not html:
+def fetch_match_links(date_str):
+    url = f"{URL_BASE}/{date_str}/"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code != 200:
+            log(f"Ошибка загрузки {url}")
+            return []
+        soup = BeautifulSoup(resp.text, "html.parser")
+        match_links = soup.select(".event-table tr a[href]")
+        return ["https://www.oddsmath.com" + link['href'] for link in match_links]
+    except Exception as e:
+        log(f"Ошибка: {e}")
+        return []
+
+def check_match(url):
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return
+        soup = BeautifulSoup(resp.text, "html.parser")
+        rows = soup.select("table tr")
+        for row in rows:
+            cells = row.find_all("td")
+            if len(cells) < 5:
+                continue
+            for cell in cells:
+                text = cell.get_text(strip=True).replace("€", "").replace(",", ".")
+                if text.replace(".", "").isdigit():
+                    value = float(text)
+                    if value >= THRESHOLD:
+                        log(f"Найдена ставка {value}€: {url}")
+                        send_message(CHAT_ID, f"💰 Ставка BACK: {value}€\n{url}")
+                        return  # достаточно первой
+    except Exception as e:
+        log(f"Ошибка матча: {e}")
+
+def main():
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    links = fetch_match_links(date_str)
+    if not links:
+        log("Матчей не найдено.")
         return
+    log(f"Найдено матчей: {len(links)}")
+    for url in links:
+        check_match(url)
+        time.sleep(1)
 
-    soup = BeautifulSoup(html, "html.parser")
-
-    markets = soup.select("tr[onclick]")
-    for market in markets:
-        onclick = market.get("onclick", "")
-        if "back" not in onclick.lower():
-            continue
-
-        cells = market.find_all("td")
-        if len(cells) < 5:
-            continue
-
-        try:
-            amount_str = cells[-1].text.strip().replace("€", "").replace(",", "").split(".")[0]
-            amount = int(amount_str)
-        except Exception:
-            continue
-
-        if amount >= THRESHOLD:
-            message = f"💸 Найдена ставка {amount}€\n🔗 {match_url}"
-            bot.send_message(chat_id=CHAT_ID, text=message)
-            log(f"Отправлено уведомление: {amount}€ — {match_url}")
-            break
-
-# === Главный цикл ===
 if __name__ == "__main__":
-    while True:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        url = f"https://www.oddsmath.com/football/matches/{date_str}/"
-        html = fetch_html(url)
-
-        if not html:
-            time.sleep(1800)
-            continue
-
-        soup = BeautifulSoup(html, "html.parser")
-        links = [
-            "https://www.oddsmath.com" + a["href"]
-            for a in soup.select("a[href^='/football/match/']")
-        ]
-        unique_links = list(set(links))
-
-        log(f"Найдено матчей: {len(unique_links)}")
-
-        for link in unique_links:
-            check_match(link)
-            time.sleep(1)
-
-        time.sleep(1800)  # Проверка каждые 30 минут
+    main()
